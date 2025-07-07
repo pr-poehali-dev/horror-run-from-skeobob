@@ -101,7 +101,20 @@ const Index = () => {
           return;
         }
 
-        // Движение СКЕБОБА
+        if (blindCooldown > 0) {
+          setBlindCooldown((prev) => prev - 1);
+        }
+      }, 100);
+
+      return () => clearInterval(gameLoop);
+    }
+  }, [gameState, playerPos, blindCooldown]);
+
+  // Отдельный эффект для движения СКЕБОБА
+  useEffect(() => {
+    if (gameState === "playing") {
+      const skebobLoop = setInterval(() => {
+        // СКЕБОБ двигается постоянно, только если не ослеплен
         if (!isBlinded) {
           setSkebobPos((prev) => {
             const newPos = findPath(prev, playerPos);
@@ -111,15 +124,11 @@ const Index = () => {
             return newPos;
           });
         }
+      }, 120); // Быстрее чем раньше
 
-        if (blindCooldown > 0) {
-          setBlindCooldown((prev) => prev - 1);
-        }
-      }, 200);
-
-      return () => clearInterval(gameLoop);
+      return () => clearInterval(skebobLoop);
     }
-  }, [gameState, playerPos, isBlinded, blindCooldown]);
+  }, [gameState, playerPos, isBlinded]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -171,7 +180,7 @@ const Index = () => {
 
           return newPos;
         });
-      }, 150);
+      }, 120); // Ускорил движение игрока
 
       return () => clearInterval(moveLoop);
     }
