@@ -3,11 +3,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Icon from "@/components/ui/icon";
 
-const CELL_SIZE = 40;
 const MAZE_WIDTH = 25;
 const MAZE_HEIGHT = 15;
+const WALL_HEIGHT = 100;
+const PERSPECTIVE = 400;
+const FOV = 60;
 
-// Лабиринт: 1 = стена, 0 = проход
+// Лабиринт: 1 = стена, 0 = проход, 2 = выход
 const MAZE = [
   [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
   [1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1],
@@ -26,68 +28,253 @@ const MAZE = [
   [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
 ];
 
+interface Player {
+  x: number;
+  y: number;
+  angle: number;
+}
+
 const Index = () => {
-  const [gameState, setGameState] = useState("menu"); // menu, playing, gameOver, victory
-  const [playerPos, setPlayerPos] = useState({ x: 1, y: 1 });
-  const [skebobPos, setSkebobPos] = useState({ x: 1, y: 13 });
+  const [gameState, setGameState] = useState("menu");
+  const [player, setPlayer] = useState<Player>({ x: 1.5, y: 1.5, angle: 0 });
+  const [skebob, setSkebob] = useState({ x: 1.5, y: 13.5, angle: 0 });
   const [isBlinded, setIsBlinded] = useState(false);
   const [blindCooldown, setBlindCooldown] = useState(0);
   const [score, setScore] = useState(0);
   const [highScores, setHighScores] = useState([1250, 980, 765, 432, 201]);
-  const gameRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [keys, setKeys] = useState({
+    w: false,
+    s: false,
+    a: false,
+    d: false,
     left: false,
     right: false,
-    up: false,
-    down: false,
   });
 
   const isWall = (x: number, y: number) => {
-    if (x < 0 || x >= MAZE_WIDTH || y < 0 || y >= MAZE_HEIGHT) return true;
-    return MAZE[y][x] === 1;
+    const gridX = Math.floor(x);
+    const gridY = Math.floor(y);
+    if (gridX < 0 || gridX >= MAZE_WIDTH || gridY < 0 || gridY >= MAZE_HEIGHT)
+      return true;
+    return MAZE[gridY][gridX] === 1;
   };
 
   const isExit = (x: number, y: number) => {
-    return MAZE[y][x] === 2;
+    const gridX = Math.floor(x);
+    const gridY = Math.floor(y);
+    if (gridX < 0 || gridX >= MAZE_WIDTH || gridY < 0 || gridY >= MAZE_HEIGHT)
+      return false;
+    return MAZE[gridY][gridX] === 2;
   };
 
-  const canMove = (x: number, y: number) => {
-    return !isWall(x, y);
+  const castRay = (startX: number, startY: number, angle: number) => {
+    const dx = Math.cos(angle);
+    const dy = Math.sin(angle);
+    let x = startX;
+    let y = startY;
+    let distance = 0;
+
+    while (distance < 30) {
+      x += dx * 0.1;
+      y += dy * 0.1;
+      distance += 0.1;
+
+      if (isWall(x, y)) {
+        return { distance, hitWall: true };
+      }
+    }
+
+    return { distance: 30, hitWall: false };
   };
 
-  const getDistance = (
-    pos1: { x: number; y: number },
-    pos2: { x: number; y: number },
-  ) => {
-    return Math.abs(pos1.x - pos2.x) + Math.abs(pos1.y - pos2.y);
+  const render3D = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const width = canvas.width;
+    const height = canvas.height;
+
+    // Очистка
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, width, height);
+
+    // Пол
+    ctx.fillStyle = "#2d2d2d";
+    ctx.fillRect(0, height / 2, width, height / 2);
+
+    // Потолок
+    ctx.fillStyle = "#1a1a1a";
+    ctx.fillRect(0, 0, width, height / 2);
+
+    // Рендер стен
+    const numRays = width / 2;
+    for (let i = 0; i < numRays; i++) {
+      const rayAngle =
+        player.angle -
+        (FOV / 2) * (Math.PI / 180) +
+        (i / numRays) * FOV * (Math.PI / 180);
+      const ray = castRay(player.x, player.y, rayAngle);
+
+      if (ray.hitWall) {
+        const wallHeight = (WALL_HEIGHT / ray.distance) * PERSPECTIVE;
+        const wallTop = height / 2 - wallHeight / 2;
+        const wallBottom = height / 2 + wallHeight / 2;
+
+        // Затенение по расстоянию
+        const brightness = Math.max(0, 1 - ray.distance / 15);
+        const colorValue = Math.floor(brightness * 200);
+
+        ctx.fillStyle = `rgb(${colorValue + 55}, ${colorValue + 20}, ${colorValue + 20})`;
+        ctx.fillRect(i * 2, wallTop, 2, wallHeight);
+
+        // Добавляем текстуру стен
+        if (i % 4 === 0) {
+          ctx.fillStyle = `rgb(${colorValue + 30}, ${colorValue + 10}, ${colorValue + 10})`;
+          ctx.fillRect(i * 2, wallTop, 1, wallHeight);
+        }
+      }
+    }
+
+    // Рендер СКЕБОБА
+    const skebobDx = skebob.x - player.x;
+    const skebobDy = skebob.y - player.y;
+    const skebobDistance = Math.sqrt(skebobDx * skebobDx + skebobDy * skebobDy);
+    const skebobAngle = Math.atan2(skebobDy, skebobDx);
+    const angleDiff = skebobAngle - player.angle;
+
+    // Нормализация угла
+    let normalizedAngle = angleDiff;
+    while (normalizedAngle > Math.PI) normalizedAngle -= 2 * Math.PI;
+    while (normalizedAngle < -Math.PI) normalizedAngle += 2 * Math.PI;
+
+    const fovRad = FOV * (Math.PI / 180);
+    if (Math.abs(normalizedAngle) < fovRad / 2 && skebobDistance < 15) {
+      const skebobScreenX =
+        width / 2 + (normalizedAngle / (fovRad / 2)) * (width / 2);
+      const skebobSize = (80 / skebobDistance) * PERSPECTIVE;
+      const skebobTop = height / 2 - skebobSize / 2;
+
+      // Рендер СКЕБОБА
+      ctx.fillStyle = isBlinded
+        ? "rgba(139, 69, 19, 0.3)"
+        : "rgba(139, 69, 19, 0.8)";
+      ctx.fillRect(
+        skebobScreenX - skebobSize / 2,
+        skebobTop,
+        skebobSize,
+        skebobSize,
+      );
+
+      // Глаза СКЕБОБА
+      if (!isBlinded) {
+        ctx.fillStyle = "red";
+        ctx.fillRect(
+          skebobScreenX - skebobSize / 3,
+          skebobTop + skebobSize / 4,
+          skebobSize / 6,
+          skebobSize / 6,
+        );
+        ctx.fillRect(
+          skebobScreenX + skebobSize / 6,
+          skebobTop + skebobSize / 4,
+          skebobSize / 6,
+          skebobSize / 6,
+        );
+      }
+    }
+
+    // Crosshair
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(width / 2 - 10, height / 2);
+    ctx.lineTo(width / 2 + 10, height / 2);
+    ctx.moveTo(width / 2, height / 2 - 10);
+    ctx.lineTo(width / 2, height / 2 + 10);
+    ctx.stroke();
+
+    // Миникарта
+    const miniSize = 120;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+    ctx.fillRect(width - miniSize - 10, 10, miniSize, miniSize);
+
+    // Стены на миникарте
+    ctx.fillStyle = "#8B0000";
+    for (let y = 0; y < MAZE_HEIGHT; y++) {
+      for (let x = 0; x < MAZE_WIDTH; x++) {
+        if (MAZE[y][x] === 1) {
+          ctx.fillRect(
+            width - miniSize - 10 + (x * miniSize) / MAZE_WIDTH,
+            10 + (y * miniSize) / MAZE_HEIGHT,
+            miniSize / MAZE_WIDTH,
+            miniSize / MAZE_HEIGHT,
+          );
+        }
+      }
+    }
+
+    // Игрок на миникарте
+    ctx.fillStyle = "blue";
+    ctx.fillRect(
+      width - miniSize - 10 + (player.x * miniSize) / MAZE_WIDTH - 2,
+      10 + (player.y * miniSize) / MAZE_HEIGHT - 2,
+      4,
+      4,
+    );
+
+    // СКЕБОБ на миникарте
+    ctx.fillStyle = isBlinded
+      ? "rgba(139, 69, 19, 0.3)"
+      : "rgba(139, 69, 19, 1)";
+    ctx.fillRect(
+      width - miniSize - 10 + (skebob.x * miniSize) / MAZE_WIDTH - 2,
+      10 + (skebob.y * miniSize) / MAZE_HEIGHT - 2,
+      4,
+      4,
+    );
+  };
+
+  const movePlayer = (dx: number, dy: number) => {
+    const newX = player.x + dx;
+    const newY = player.y + dy;
+
+    if (!isWall(newX, player.y)) {
+      setPlayer((prev) => ({ ...prev, x: newX }));
+    }
+    if (!isWall(player.x, newY)) {
+      setPlayer((prev) => ({ ...prev, y: newY }));
+    }
   };
 
   const findPath = (
     start: { x: number; y: number },
     target: { x: number; y: number },
   ) => {
-    const directions = [
-      { x: 0, y: -1 }, // вверх
-      { x: 0, y: 1 }, // вниз
-      { x: -1, y: 0 }, // влево
-      { x: 1, y: 0 }, // вправо
-    ];
+    const dx = target.x - start.x;
+    const dy = target.y - start.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
 
-    let bestMove = start;
-    let bestDistance = getDistance(start, target);
+    if (distance === 0) return start;
 
-    for (const dir of directions) {
-      const newPos = { x: start.x + dir.x, y: start.y + dir.y };
-      if (canMove(newPos.x, newPos.y)) {
-        const distance = getDistance(newPos, target);
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          bestMove = newPos;
-        }
+    const moveSpeed = 0.02;
+    const newX = start.x + (dx / distance) * moveSpeed;
+    const newY = start.y + (dy / distance) * moveSpeed;
+
+    if (!isWall(newX, start.y)) {
+      if (!isWall(start.x, newY)) {
+        return { x: newX, y: newY };
       }
+      return { x: newX, y: start.y };
+    }
+    if (!isWall(start.x, newY)) {
+      return { x: start.x, y: newY };
     }
 
-    return bestMove;
+    return start;
   };
 
   useEffect(() => {
@@ -95,8 +282,7 @@ const Index = () => {
       const gameLoop = setInterval(() => {
         setScore((prev) => prev + 1);
 
-        // Проверка на победу
-        if (isExit(playerPos.x, playerPos.y)) {
+        if (isExit(player.x, player.y)) {
           setGameState("victory");
           return;
         }
@@ -104,92 +290,142 @@ const Index = () => {
         if (blindCooldown > 0) {
           setBlindCooldown((prev) => prev - 1);
         }
-      }, 100);
+
+        render3D();
+      }, 50);
 
       return () => clearInterval(gameLoop);
     }
-  }, [gameState, playerPos, blindCooldown]);
+  }, [gameState, player, skebob, isBlinded, blindCooldown]);
 
-  // Отдельный эффект для движения СКЕБОБА
   useEffect(() => {
     if (gameState === "playing") {
       const skebobLoop = setInterval(() => {
-        // СКЕБОБ двигается постоянно, только если не ослеплен
         if (!isBlinded) {
-          setSkebobPos((prev) => {
-            const newPos = findPath(prev, playerPos);
-            if (getDistance(newPos, playerPos) <= 1) {
+          setSkebob((prev) => {
+            const newPos = findPath(prev, { x: player.x, y: player.y });
+            const distance = Math.sqrt(
+              (newPos.x - player.x) ** 2 + (newPos.y - player.y) ** 2,
+            );
+            if (distance < 0.5) {
               setGameState("gameOver");
             }
             return newPos;
           });
         }
-      }, 120); // Быстрее чем раньше
+      }, 100);
 
       return () => clearInterval(skebobLoop);
     }
-  }, [gameState, playerPos, isBlinded]);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (gameState !== "playing") return;
-
-      e.preventDefault();
-      if (e.key === "ArrowLeft" || e.key === "a")
-        setKeys((prev) => ({ ...prev, left: true }));
-      if (e.key === "ArrowRight" || e.key === "d")
-        setKeys((prev) => ({ ...prev, right: true }));
-      if (e.key === "ArrowUp" || e.key === "w")
-        setKeys((prev) => ({ ...prev, up: true }));
-      if (e.key === "ArrowDown" || e.key === "s")
-        setKeys((prev) => ({ ...prev, down: true }));
-      if (e.key === " ") {
-        blindSkebob();
-      }
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === "ArrowLeft" || e.key === "a")
-        setKeys((prev) => ({ ...prev, left: false }));
-      if (e.key === "ArrowRight" || e.key === "d")
-        setKeys((prev) => ({ ...prev, right: false }));
-      if (e.key === "ArrowUp" || e.key === "w")
-        setKeys((prev) => ({ ...prev, up: false }));
-      if (e.key === "ArrowDown" || e.key === "s")
-        setKeys((prev) => ({ ...prev, down: false }));
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
-    };
-  }, [gameState, blindCooldown]);
+  }, [gameState, player, isBlinded]);
 
   useEffect(() => {
     if (gameState === "playing") {
       const moveLoop = setInterval(() => {
-        setPlayerPos((prev) => {
-          let newPos = { ...prev };
+        const moveSpeed = 0.03;
+        const rotSpeed = 0.02;
 
-          if (keys.left && canMove(prev.x - 1, prev.y)) newPos.x = prev.x - 1;
-          if (keys.right && canMove(prev.x + 1, prev.y)) newPos.x = prev.x + 1;
-          if (keys.up && canMove(prev.x, prev.y - 1)) newPos.y = prev.y - 1;
-          if (keys.down && canMove(prev.x, prev.y + 1)) newPos.y = prev.y + 1;
+        let dx = 0,
+          dy = 0;
+        if (keys.w) {
+          dx += Math.cos(player.angle) * moveSpeed;
+          dy += Math.sin(player.angle) * moveSpeed;
+        }
+        if (keys.s) {
+          dx -= Math.cos(player.angle) * moveSpeed;
+          dy -= Math.sin(player.angle) * moveSpeed;
+        }
+        if (keys.a) {
+          dx += Math.cos(player.angle - Math.PI / 2) * moveSpeed;
+          dy += Math.sin(player.angle - Math.PI / 2) * moveSpeed;
+        }
+        if (keys.d) {
+          dx += Math.cos(player.angle + Math.PI / 2) * moveSpeed;
+          dy += Math.sin(player.angle + Math.PI / 2) * moveSpeed;
+        }
 
-          return newPos;
-        });
-      }, 120); // Ускорил движение игрока
+        if (dx !== 0 || dy !== 0) {
+          movePlayer(dx, dy);
+        }
+
+        if (keys.left)
+          setPlayer((prev) => ({ ...prev, angle: prev.angle - rotSpeed }));
+        if (keys.right)
+          setPlayer((prev) => ({ ...prev, angle: prev.angle + rotSpeed }));
+
+        render3D();
+      }, 16);
 
       return () => clearInterval(moveLoop);
     }
-  }, [keys, gameState]);
+  }, [keys, gameState, player]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (gameState !== "playing") return;
+      e.preventDefault();
+
+      if (e.key === "w" || e.key === "W")
+        setKeys((prev) => ({ ...prev, w: true }));
+      if (e.key === "s" || e.key === "S")
+        setKeys((prev) => ({ ...prev, s: true }));
+      if (e.key === "a" || e.key === "A")
+        setKeys((prev) => ({ ...prev, a: true }));
+      if (e.key === "d" || e.key === "D")
+        setKeys((prev) => ({ ...prev, d: true }));
+      if (e.key === "ArrowLeft") setKeys((prev) => ({ ...prev, left: true }));
+      if (e.key === "ArrowRight") setKeys((prev) => ({ ...prev, right: true }));
+      if (e.key === " ") blindSkebob();
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "w" || e.key === "W")
+        setKeys((prev) => ({ ...prev, w: false }));
+      if (e.key === "s" || e.key === "S")
+        setKeys((prev) => ({ ...prev, s: false }));
+      if (e.key === "a" || e.key === "A")
+        setKeys((prev) => ({ ...prev, a: false }));
+      if (e.key === "d" || e.key === "D")
+        setKeys((prev) => ({ ...prev, d: false }));
+      if (e.key === "ArrowLeft") setKeys((prev) => ({ ...prev, left: false }));
+      if (e.key === "ArrowRight")
+        setKeys((prev) => ({ ...prev, right: false }));
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (gameState === "playing") {
+        const sensitivity = 0.003;
+        const deltaX = e.movementX * sensitivity;
+        setPlayer((prev) => ({ ...prev, angle: prev.angle + deltaX }));
+      }
+    };
+
+    const handleClick = () => {
+      if (gameState === "playing") {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          canvas.requestPointerLock();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("click", handleClick);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("click", handleClick);
+    };
+  }, [gameState, blindCooldown]);
 
   const startGame = () => {
     setGameState("playing");
-    setPlayerPos({ x: 1, y: 1 });
-    setSkebobPos({ x: 1, y: 13 });
+    setPlayer({ x: 1.5, y: 1.5, angle: 0 });
+    setSkebob({ x: 1.5, y: 13.5, angle: 0 });
     setScore(0);
     setIsBlinded(false);
     setBlindCooldown(0);
@@ -198,7 +434,7 @@ const Index = () => {
   const blindSkebob = () => {
     if (blindCooldown === 0) {
       setIsBlinded(true);
-      setBlindCooldown(50);
+      setBlindCooldown(100);
       setTimeout(() => setIsBlinded(false), 3000);
     }
   };
@@ -223,7 +459,7 @@ const Index = () => {
           >
             СКЕБОБ
           </h1>
-          <p className="text-xl opacity-80 mb-8">ХОРРОР ЛАБИРИНТ</p>
+          <p className="text-xl opacity-80 mb-8">3D ХОРРОР ЛАБИРИНТ</p>
 
           <div className="space-y-4">
             <Button
@@ -262,7 +498,15 @@ const Index = () => {
   if (gameState === "playing") {
     return (
       <div className="h-screen w-screen bg-black text-white relative overflow-hidden">
-        <div className="absolute top-4 left-4 text-2xl font-bold z-10">
+        <canvas
+          ref={canvasRef}
+          width={1200}
+          height={800}
+          className="absolute inset-0 w-full h-full object-cover cursor-none"
+          style={{ imageRendering: "pixelated" }}
+        />
+
+        <div className="absolute top-4 left-4 text-2xl font-bold z-10 bg-black/50 px-4 py-2 rounded">
           ОЧКИ: {score}
         </div>
 
@@ -273,85 +517,15 @@ const Index = () => {
             className="bg-yellow-600 hover:bg-yellow-500 text-black font-bold"
           >
             {blindCooldown > 0
-              ? `ПЕРЕЗАРЯДКА ${Math.ceil(blindCooldown / 10)}`
+              ? `ПЕРЕЗАРЯДКА ${Math.ceil(blindCooldown / 20)}`
               : "ОСЛЕПИТЬ"}
           </Button>
         </div>
 
-        <div
-          className="absolute inset-0 flex items-center justify-center"
-          style={{
-            width: MAZE_WIDTH * CELL_SIZE,
-            height: MAZE_HEIGHT * CELL_SIZE,
-            left: "50%",
-            top: "50%",
-            transform: "translate(-50%, -50%)",
-          }}
-        >
-          {/* Лабиринт */}
-          {MAZE.map((row, y) =>
-            row.map((cell, x) => (
-              <div
-                key={`${x}-${y}`}
-                className={`absolute ${
-                  cell === 1
-                    ? "bg-red-900"
-                    : cell === 2
-                      ? "bg-green-600"
-                      : "bg-gray-900"
-                } border border-gray-700`}
-                style={{
-                  left: x * CELL_SIZE,
-                  top: y * CELL_SIZE,
-                  width: CELL_SIZE,
-                  height: CELL_SIZE,
-                }}
-              >
-                {cell === 2 && (
-                  <div className="w-full h-full flex items-center justify-center">
-                    <Icon name="DoorOpen" size={24} className="text-white" />
-                  </div>
-                )}
-              </div>
-            )),
-          )}
-
-          {/* Игрок */}
-          <div
-            className="absolute bg-blue-500 rounded-full flex items-center justify-center transition-all duration-150 z-20"
-            style={{
-              left: playerPos.x * CELL_SIZE + 4,
-              top: playerPos.y * CELL_SIZE + 4,
-              width: CELL_SIZE - 8,
-              height: CELL_SIZE - 8,
-            }}
-          >
-            <Icon name="User" size={24} className="text-white" />
-          </div>
-
-          {/* СКЕБОБ */}
-          <div
-            className={`absolute rounded-full flex items-center justify-center transition-all duration-200 z-20 ${
-              isBlinded ? "opacity-30" : "opacity-100"
-            }`}
-            style={{
-              left: skebobPos.x * CELL_SIZE + 2,
-              top: skebobPos.y * CELL_SIZE + 2,
-              width: CELL_SIZE - 4,
-              height: CELL_SIZE - 4,
-            }}
-          >
-            <img
-              src="https://cdn.poehali.dev/files/676c723d-f40b-4025-a779-4086080246ef.png"
-              alt="СКЕБОБ"
-              className="w-full h-full object-cover rounded-full"
-            />
-          </div>
-        </div>
-
-        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 text-center z-10">
+        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 text-center z-10 bg-black/50 px-4 py-2 rounded">
           <p className="text-sm opacity-70">
-            WASD или стрелки для движения | ПРОБЕЛ для ослепления
+            WASD - движение | Мышь - поворот | ПРОБЕЛ - ослепление | Кликни для
+            захвата курсора
           </p>
         </div>
       </div>
